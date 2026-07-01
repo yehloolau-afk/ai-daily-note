@@ -1,7 +1,9 @@
-# AI 小灵感 · 工具文档
+# AI 每日小记 · 工具文档
 
 | | |
 |---|---|
+| **GitHub 仓库** | https://github.com/yehloolau-afk/ai-daily-note |
+| **详情页** | https://yehloolau-afk.github.io/ai-daily-note/ |
 | **本地路径** | `For团队AI工具/AI收获记录/` |
 | **启动方式** | 双击 `启动记录器.command` |
 | **保存位置** | `~/Documents/滴滴重要同步-OB/yehloo-OB/AI收获记录.md` |
