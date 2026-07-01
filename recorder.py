@@ -313,9 +313,6 @@ class RecorderApi:
                 print(f"trigger error: {e}")
         threading.Thread(target=_do, daemon=True).start()
 
-    def quit_app(self):
-        sys.exit(0)
-
     def save_record(self, text: str) -> bool:
         text = text.strip().replace("|", "｜").replace("\n", " ").replace("\r", " ")
         if not text:
