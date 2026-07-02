@@ -14,7 +14,7 @@ import subprocess
 from datetime import datetime
 
 OBSIDIAN_FILE = os.path.expanduser(
-    "~/Documents/滴滴重要同步-OB/yehloo-OB/AI收获记录.md"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/yehloo-OB/AI每日小记.md"
 )
 
 HTML = """<!DOCTYPE html>
@@ -102,7 +102,9 @@ HTML = """<!DOCTYPE html>
 
   .exp-top {
     display: flex; align-items: center; gap: 10px;
+    cursor: grab;
   }
+  .exp-top.dragging { cursor: grabbing; }
   .status {
     flex: 1;
     font-size: 11px;
@@ -125,7 +127,7 @@ HTML = """<!DOCTYPE html>
 
   textarea {
     width: 100%;
-    min-height: 60px;
+    min-height: 120px;
     height: auto;
     overflow: hidden;
     background: #F7F7F7;
@@ -189,6 +191,31 @@ HTML = """<!DOCTYPE html>
 <script>
 let resizeTimer = null;
 
+// ── 顶部栏拖拽移动窗口 ──
+(function() {
+  let dragging = false, prevX = 0, prevY = 0;
+  const expTop = document.querySelector('.exp-top');
+
+  expTop.addEventListener('mousedown', e => {
+    if (e.target.closest('.close-btn, .mic-btn')) return;
+    dragging = true;
+    prevX = e.screenX; prevY = e.screenY;
+    expTop.classList.add('dragging');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const dx = e.screenX - prevX;
+    const dy = e.screenY - prevY;
+    prevX = e.screenX; prevY = e.screenY;
+    if (dx !== 0 || dy !== 0) window.pywebview.api.move_by(dx, dy);
+  });
+  document.addEventListener('mouseup', () => {
+    dragging = false;
+    expTop.classList.remove('dragging');
+  });
+})();
+
 
 function autoResize(el) {
   el.style.height = 'auto';
@@ -211,7 +238,7 @@ function onMicClick() {
   textarea.value = '';
   textarea.style.height = 'auto';
 
-  window.pywebview.api.resizeExpanded(160).then(() => textarea.focus());
+  window.pywebview.api.resizeExpanded(320).then(() => textarea.focus());
 
   window.pywebview.api.trigger_typeless().then(() => {
     let poll = setInterval(() => autoResize(textarea), 300);
@@ -257,7 +284,7 @@ async function onSave() {
 
 _window_ref = None
 MINI_W, MINI_H = 72, 96
-EXP_W = 260
+EXP_W = 520
 _win_x, _win_y = 0, 0  # 追踪窗口位置，供拖拽用
 
 class RecorderApi:
@@ -276,6 +303,13 @@ class RecorderApi:
         _win_x, _win_y = 0, (sh - h) // 2
         if _window_ref:
             _window_ref.resize(EXP_W, h)
+            _window_ref.move(_win_x, _win_y)
+
+    def move_by(self, dx: int, dy: int):
+        global _win_x, _win_y
+        _win_x += dx
+        _win_y -= dy  # JS screenY 向下为正，macOS y 向上为正
+        if _window_ref:
             _window_ref.move(_win_x, _win_y)
 
     def quit_app(self):
@@ -323,8 +357,8 @@ class RecorderApi:
             is_new = not os.path.exists(OBSIDIAN_FILE) or os.path.getsize(OBSIDIAN_FILE) == 0
             with open(OBSIDIAN_FILE, "a", encoding="utf-8") as f:
                 if is_new:
-                    f.write("# AI 收获记录\n\n| 日期 | 收获 |\n|------|------|\n")
-                f.write(f"| {date} | {text} |\n")
+                    f.write("AI每日小记\n\n| 日期 | 来源 | 收获 |\n| --- | --- | --- |\n")
+                f.write(f"| {date} | PC端 | {text} |\n")
             print(f"✅ 已记录：{text[:50]}{'...' if len(text) > 50 else ''}")
             return True
         except Exception as e:
@@ -364,6 +398,17 @@ def main():
     )
 
     _window_ref = window
+
+    def _hide_dock():
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+        from PyObjCTools.AppHelper import callAfter
+        callAfter(
+            NSApplication.sharedApplication().setActivationPolicy_,
+            NSApplicationActivationPolicyAccessory
+        )
+
+    window.events.loaded += _hide_dock
+
     print("✅ AI 收获记录器已启动（左侧悬浮）")
     print(f"   保存位置：{OBSIDIAN_FILE}")
     webview.start(debug=False)
