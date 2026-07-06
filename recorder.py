@@ -21,8 +21,10 @@ HTML = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="light">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html { color-scheme: light; }
 
   body {
     background: transparent;
@@ -191,9 +193,10 @@ HTML = """<!DOCTYPE html>
 <script>
 let resizeTimer = null;
 
-// ── 顶部栏拖拽移动窗口 ──
+// ── 顶部栏拖拽：用 rAF 合批，避免高频 API 调用导致频闪 ──
 (function() {
   let dragging = false, prevX = 0, prevY = 0;
+  let pendingDx = 0, pendingDy = 0, rafPending = false;
   const expTop = document.querySelector('.exp-top');
 
   expTop.addEventListener('mousedown', e => {
@@ -205,10 +208,19 @@ let resizeTimer = null;
   });
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
-    const dx = e.screenX - prevX;
-    const dy = e.screenY - prevY;
+    pendingDx += e.screenX - prevX;
+    pendingDy += e.screenY - prevY;
     prevX = e.screenX; prevY = e.screenY;
-    if (dx !== 0 || dy !== 0) window.pywebview.api.move_by(dx, dy);
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        if (pendingDx !== 0 || pendingDy !== 0) {
+          window.pywebview.api.move_by(pendingDx, pendingDy);
+          pendingDx = 0; pendingDy = 0;
+        }
+      });
+    }
   });
   document.addEventListener('mouseup', () => {
     dragging = false;
@@ -221,29 +233,47 @@ function autoResize(el) {
   el.style.height = 'auto';
   el.style.height = el.scrollHeight + 'px';
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(syncWindowHeight, 50);
+  resizeTimer = setTimeout(syncWindowHeight, 80);
 }
 
 function syncWindowHeight() {
   const card = document.getElementById('cardExpanded');
-  const h = Math.max(100, Math.min(card.offsetHeight + 4, 600));
+  const h = Math.max(160, Math.min(card.offsetHeight + 4, 600));
   window.pywebview.api.resizeExpanded(h);
 }
 
-function onMicClick() {
+async function onMicClick() {
   document.getElementById('cardMini').style.display = 'none';
   document.getElementById('cardExpanded').classList.add('show');
 
   const textarea = document.getElementById('textArea');
+  const status   = document.getElementById('status');
   textarea.value = '';
   textarea.style.height = 'auto';
+  status.textContent = '⏳ 窗口展开中…';
 
-  window.pywebview.api.resizeExpanded(320).then(() => textarea.focus());
+  // 1. 先展开窗口，等主线程真正完成 resize
+  await window.pywebview.api.resizeExpanded(320);
+  await new Promise(r => setTimeout(r, 200));   // 留给系统动画
 
-  window.pywebview.api.trigger_typeless().then(() => {
-    let poll = setInterval(() => autoResize(textarea), 300);
-    setTimeout(() => clearInterval(poll), 30000);
-  });
+  // 2. 聚焦 textarea，确保 Typeless 注入目标正确
+  textarea.focus();
+  status.textContent = '🔴 识别中，说完停顿即可…';
+
+  // 3. 触发 Typeless
+  await window.pywebview.api.trigger_typeless();
+
+  // 4. 轮询 textarea 内容变化（最长 60s）
+  let poll = setInterval(() => {
+    autoResize(textarea);
+    if (textarea.value.trim()) {
+      status.textContent = '说完后点「保存到 Obsidian」';
+    }
+  }, 300);
+  setTimeout(() => {
+    clearInterval(poll);
+    if (!textarea.value.trim()) status.textContent = '未识别到内容，可手动输入';
+  }, 60000);
 }
 
 function onCancel() {
@@ -287,30 +317,52 @@ MINI_W, MINI_H = 72, 96
 EXP_W = 520
 _win_x, _win_y = 0, 0  # 追踪窗口位置，供拖拽用
 
+
+def _run_on_main(fn):
+    """在 macOS 主线程执行 fn（AppKit 要求 UI 操作必须在主线程）"""
+    try:
+        from AppKit import NSOperationQueue, NSThread
+        if NSThread.isMainThread():
+            fn()
+        else:
+            NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
+    except Exception:
+        fn()  # 非 macOS 环境直接调
+
+
 class RecorderApi:
     def resizeMini(self):
-        global _win_x, _win_y
-        sw, sh = _get_screen_size()
-        _win_x, _win_y = 0, (sh - MINI_H) // 2
-        if _window_ref:
-            _window_ref.resize(MINI_W, MINI_H)
-            _window_ref.move(_win_x, _win_y)
+        def _do():
+            global _win_x, _win_y
+            sw, sh = _get_screen_size()
+            _win_x, _win_y = 0, (sh - MINI_H) // 2
+            if _window_ref:
+                _window_ref.resize(MINI_W, MINI_H)
+                _window_ref.move(_win_x, _win_y)
+        _run_on_main(_do)
+        return True
 
     def resizeExpanded(self, h: int):
-        global _win_x, _win_y
-        sw, sh = _get_screen_size()
-        h = max(100, min(h, 600))
-        _win_x, _win_y = 0, (sh - h) // 2
-        if _window_ref:
-            _window_ref.resize(EXP_W, h)
-            _window_ref.move(_win_x, _win_y)
+        def _do():
+            global _win_x, _win_y
+            sw, sh = _get_screen_size()
+            hc = max(100, min(h, 600))
+            _win_x, _win_y = 0, (sh - hc) // 2
+            if _window_ref:
+                _window_ref.resize(EXP_W, hc)
+                _window_ref.move(_win_x, _win_y)
+        _run_on_main(_do)
+        return True
 
     def move_by(self, dx: int, dy: int):
-        global _win_x, _win_y
-        _win_x += dx
-        _win_y -= dy  # JS screenY 向下为正，macOS y 向上为正
-        if _window_ref:
-            _window_ref.move(_win_x, _win_y)
+        def _do():
+            global _win_x, _win_y
+            _win_x += dx
+            _win_y -= dy  # JS screenY 向下为正，macOS y 向上为正
+            if _window_ref:
+                _window_ref.move(_win_x, _win_y)
+        _run_on_main(_do)
+        return True
 
     def quit_app(self):
         def _do():
@@ -346,6 +398,7 @@ class RecorderApi:
             except Exception as e:
                 print(f"trigger error: {e}")
         threading.Thread(target=_do, daemon=True).start()
+        return True
 
     def save_record(self, text: str) -> bool:
         text = text.strip().replace("|", "｜").replace("\n", " ").replace("\r", " ")
