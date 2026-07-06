@@ -242,6 +242,9 @@ function syncWindowHeight() {
   window.pywebview.api.resizeExpanded(h);
 }
 
+let _isRecording = false;
+let _pollTimer = null;
+
 async function onMicClick() {
   document.getElementById('cardMini').style.display = 'none';
   document.getElementById('cardExpanded').classList.add('show');
@@ -254,38 +257,54 @@ async function onMicClick() {
 
   // 1. 先展开窗口，等主线程真正完成 resize
   await window.pywebview.api.resizeExpanded(320);
-  await new Promise(r => setTimeout(r, 200));   // 留给系统动画
+  await new Promise(r => setTimeout(r, 200));
 
   // 2. 聚焦 textarea，确保 Typeless 注入目标正确
   textarea.focus();
   status.textContent = '🔴 识别中，说完停顿即可…';
+  _isRecording = true;
 
   // 3. 触发 Typeless
   await window.pywebview.api.trigger_typeless();
 
   // 4. 轮询 textarea 内容变化（最长 60s）
-  let poll = setInterval(() => {
+  clearInterval(_pollTimer);
+  _pollTimer = setInterval(() => {
     autoResize(textarea);
     if (textarea.value.trim()) {
       status.textContent = '说完后点「保存到 Obsidian」';
+      _isRecording = false;   // 有文字说明 Typeless 已完成注入
+      clearInterval(_pollTimer);
     }
   }, 300);
   setTimeout(() => {
-    clearInterval(poll);
+    clearInterval(_pollTimer);
+    _isRecording = false;
     if (!textarea.value.trim()) status.textContent = '未识别到内容，可手动输入';
   }, 60000);
 }
 
-function onCancel() {
+async function onCancel() {
+  clearInterval(_pollTimer);
+  if (_isRecording) {
+    _isRecording = false;
+    await window.pywebview.api.trigger_typeless(); // fn 键再按一次，关闭 Typeless 录音
+  }
   document.getElementById('cardExpanded').classList.remove('show');
   document.getElementById('cardMini').style.display = 'flex';
   document.getElementById('savedHint').style.display = 'none';
   document.getElementById('saveBtn').disabled = false;
   document.getElementById('saveBtn').textContent = '保存到 Obsidian';
+  document.getElementById('status').textContent = '说完后点「保存到 Obsidian」';
   window.pywebview.api.resizeMini();
 }
 
-function onClose() {
+async function onClose() {
+  clearInterval(_pollTimer);
+  if (_isRecording) {
+    _isRecording = false;
+    await window.pywebview.api.trigger_typeless(); // 关闭前先停录音
+  }
   window.pywebview.api.quit_app();
 }
 
@@ -297,6 +316,8 @@ async function onSave() {
   btn.textContent = '保存中…';
   const ok = await window.pywebview.api.save_record(text);
   if (ok) {
+    _isRecording = false;
+    clearInterval(_pollTimer);
     btn.textContent = '✓ 已保存';
     document.getElementById('savedHint').style.display = 'block';
     setTimeout(onCancel, 1200);
